@@ -10,8 +10,9 @@ try {
 }
 
 /**
- * QUANTUM WhatsApp Polling Service - Enhanced with Auto-Response
- * Polls INFORU for incoming messages and processes them through QUANTUM Response Handler
+ * QUANTUM WhatsApp Polling Service
+ * Polls INFORU for incoming messages and routes them to Claude AI (botRoutes)
+ * Falls back to pattern-matching handler if Claude is unavailable
  */
 
 class WhatsAppPollingService {
@@ -124,20 +125,20 @@ class WhatsAppPollingService {
         rawData: message
       };
 
-      // Process through QUANTUM Response Handler
-      if (quantumResponseHandler) {
-        const result = await quantumResponseHandler.processIncomingMessage(messageData);
-        
-        logger.info(`✅ Message processed`, {
-          phone: phone,
-          category: result.analysis?.category,
-          responded: !!result.response,
-          nextAction: result.analysis?.nextAction
-        });
-      } else {
-        // Fallback to basic bot forwarding
-        logger.warn('QUANTUM Response Handler not available, using fallback');
-        await this.fallbackToBasicBot(phone, text, messageData);
+      // Route to Claude AI first, fall back to pattern handler, then basic fallback
+      const claudeHandled = await this.routeToClaude(phone, text, messageData);
+      if (!claudeHandled) {
+        if (quantumResponseHandler) {
+          const result = await quantumResponseHandler.processIncomingMessage(messageData);
+          logger.info(`✅ Message processed via pattern handler`, {
+            phone: phone,
+            category: result.analysis?.category,
+            responded: !!result.response,
+          });
+        } else {
+          logger.warn('No handler available, using basic fallback');
+          await this.fallbackToBasicBot(phone, text, messageData);
+        }
       }
 
     } catch (err) {
@@ -196,7 +197,72 @@ class WhatsAppPollingService {
     }
   }
 
-  // Fallback method if QUANTUM Response Handler is not available
+  // Route to Claude AI (uses ranScript VAPI_SYSTEM_PROMPT for sales conversation)
+  async routeToClaude(phone, text, metadata) {
+    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    if (!ANTHROPIC_API_KEY) return false;
+    try {
+      const axios = require('axios');
+      const pool  = require('../db/pool');
+      const { VAPI_SYSTEM_PROMPT } = require('./ranScript');
+      // Upsert lead
+      const leadRes = await pool.query(`
+        INSERT INTO leads (phone, source, status, created_at, updated_at)
+        VALUES ($1, 'whatsapp_bot', 'active', NOW(), NOW())
+        ON CONFLICT (phone) DO UPDATE SET status = 'active', updated_at = NOW()
+        RETURNING id
+      `, [phone]).catch(() => null);
+      const leadId = leadRes?.rows?.[0]?.id;
+      // Save incoming message
+      if (leadId) {
+        await pool.query(`
+          INSERT INTO whatsapp_conversations (lead_id, sender, message, created_at)
+          VALUES ($1, 'user', $2, NOW())
+        `, [leadId, text]).catch(() => {});
+      }
+      // Get conversation history (last 10 turns)
+      const histRes = await pool.query(`
+        SELECT sender, message FROM whatsapp_conversations
+        WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 10
+      `, [leadId]).catch(() => ({ rows: [] }));
+      const history = (histRes.rows || []).reverse().map(r => ({
+        role: r.sender === 'user' ? 'user' : 'assistant',
+        content: r.message
+      }));
+      if (history.length === 0) history.push({ role: 'user', content: text });
+      // Call Claude Sonnet
+      const claudeRes = await axios.post('https://api.anthropic.com/v1/messages', {
+        model: 'claude-sonnet-4-5',
+        max_tokens: 500,
+        system: VAPI_SYSTEM_PROMPT,
+        messages: history
+      }, {
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        },
+        timeout: 12000
+      });
+      const reply = claudeRes.data?.content?.[0]?.text;
+      if (reply) {
+        await inforuService.sendWhatsAppChat(phone, reply, { source: 'claude_bot' });
+        if (leadId) {
+          await pool.query(`
+            INSERT INTO whatsapp_conversations (lead_id, sender, message, created_at)
+            VALUES ($1, 'bot', $2, NOW())
+          `, [leadId, reply]).catch(() => {});
+        }
+        logger.info(`✅ Claude reply sent to ${phone} (lead ${leadId})`);
+        return true;
+      }
+    } catch (err) {
+      logger.error('[Claude] Error routing message:', err.message);
+    }
+    return false;
+  }
+
+  // Fallback method if Claude and pattern handler are not available
   async fallbackToBasicBot(phone, text, metadata) {
     try {
       // Simple auto-response
@@ -253,19 +319,8 @@ class WhatsAppPollingService {
 // Singleton instance
 const pollingService = new WhatsAppPollingService();
 
-// ==================== AUTO-START IN PRODUCTION ====================
-
-if (inforuService && quantumResponseHandler && process.env.NODE_ENV === 'production') {
-  logger.info('🚀 Auto-starting QUANTUM WhatsApp polling in production');
-  // Start after 5 seconds to let server fully initialize
-  setTimeout(() => pollingService.start(), 5000);
-} else {
-  logger.warn('⚠️ QUANTUM WhatsApp polling not auto-started', {
-    inforuService: !!inforuService,
-    responseHandler: !!quantumResponseHandler,
-    env: process.env.NODE_ENV
-  });
-}
+// NOTE: polling is started explicitly from index.js via pollingService.start()
+// (removed auto-start here to avoid double-start and to allow non-production environments)
 
 // ==================== GRACEFUL SHUTDOWN ====================
 
