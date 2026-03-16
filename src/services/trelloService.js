@@ -40,7 +40,7 @@ async function getListId(listName) {
   }
 }
 
-async function createCard({ name, desc, listName = 'לידים חדשים', labels = [], due = null }) {
+async function createCard({ name, desc, listName = 'מוכרים', labels = [], due = null }) {
   if (!configured) {
     logger.warn('[trello] Not configured — skipping card creation');
     return { success: false, reason: 'not_configured' };
@@ -72,7 +72,7 @@ async function createInvestorCard(lead) {
   return createCard({
     name: `🏢 משקיע: ${lead.name} | ${lead.phone}`,
     desc: `**שם:** ${lead.name}\n**טלפון:** ${lead.phone}\n**אימייל:** ${lead.email || 'לא צוין'}\n**מקור:** ${lead.source || 'אתר'}\n\n${JSON.stringify(lead.form_data || {}, null, 2)}`,
-    listName: 'משקיעים'
+    listName: 'מוכרים'
   });
 }
 
@@ -88,7 +88,7 @@ async function createContactCard(lead) {
   return createCard({
     name: `📩 פנייה: ${lead.name} | ${lead.phone}`,
     desc: `**שם:** ${lead.name}\n**טלפון:** ${lead.phone}\n**אימייל:** ${lead.email || 'לא צוין'}\n**מקור:** ${lead.source || 'אתר'}\n\n${JSON.stringify(lead.form_data || {}, null, 2)}`,
-    listName: 'לידים חדשים'
+    listName: 'מוכרים'
   });
 }
 
