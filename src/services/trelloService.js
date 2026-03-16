@@ -72,7 +72,7 @@ async function createInvestorCard(lead) {
   return createCard({
     name: `🏢 משקיע: ${lead.name} | ${lead.phone}`,
     desc: `**שם:** ${lead.name}\n**טלפון:** ${lead.phone}\n**אימייל:** ${lead.email || 'לא צוין'}\n**מקור:** ${lead.source || 'אתר'}\n\n${JSON.stringify(lead.form_data || {}, null, 2)}`,
-    listName: 'מוכרים'
+    listName: 'משקיעים'
   });
 }
 
@@ -88,7 +88,7 @@ async function createContactCard(lead) {
   return createCard({
     name: `📩 פנייה: ${lead.name} | ${lead.phone}`,
     desc: `**שם:** ${lead.name}\n**טלפון:** ${lead.phone}\n**אימייל:** ${lead.email || 'לא צוין'}\n**מקור:** ${lead.source || 'אתר'}\n\n${JSON.stringify(lead.form_data || {}, null, 2)}`,
-    listName: 'מוכרים'
+    listName: 'צור קשר'
   });
 }
 
