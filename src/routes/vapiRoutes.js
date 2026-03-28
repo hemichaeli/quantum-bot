@@ -597,3 +597,4 @@ router.get('/stats', async (req, res) => {
 });
 
 module.exports = router;
+// VAPI_ASSISTANT_SCHEDULING env var refresh: Sat Mar 28 18:53:52 EDT 2026
