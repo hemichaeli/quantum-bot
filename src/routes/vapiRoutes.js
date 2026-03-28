@@ -598,3 +598,14 @@ router.get('/stats', async (req, res) => {
 
 module.exports = router;
 // VAPI_ASSISTANT_SCHEDULING env var refresh: Sat Mar 28 18:53:52 EDT 2026
+
+// Debug endpoint to check env vars at request time
+router.get('/env-debug', (req, res) => {
+  res.json({
+    VAPI_ASSISTANT_SCHEDULING: process.env.VAPI_ASSISTANT_SCHEDULING || 'NOT SET',
+    VAPI_ASSISTANT_COLD: process.env.VAPI_ASSISTANT_COLD ? process.env.VAPI_ASSISTANT_COLD.substring(0,8)+'...' : 'NOT SET',
+    VAPI_API_KEY: process.env.VAPI_API_KEY ? 'SET' : 'NOT SET',
+    NODE_ENV: process.env.NODE_ENV,
+    timestamp: new Date().toISOString(),
+  });
+});
