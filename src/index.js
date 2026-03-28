@@ -205,6 +205,8 @@ app.listen(PORT, () => {
   logger.info(`[QUANTUM Bot] Running on port ${PORT}`);
   logger.info(`[QUANTUM Bot] Business line: ${process.env.INFORU_BUSINESS_LINE || '037572229'}`);
   logger.info(`[QUANTUM Bot] VAPI: ${process.env.VAPI_PHONE_NUMBER_ID ? 'configured' : 'NOT SET — outbound calls disabled'}`);
+  logger.info(`[QUANTUM Bot] VAPI_ASSISTANT_SCHEDULING: ${process.env.VAPI_ASSISTANT_SCHEDULING || 'NOT SET'}`);
+  logger.info(`[QUANTUM Bot] VAPI_ASSISTANT_COLD: ${process.env.VAPI_ASSISTANT_COLD ? process.env.VAPI_ASSISTANT_COLD.substring(0,8)+'...' : 'NOT SET'}`);
   logger.info(`[QUANTUM Bot] Claude: ${process.env.ANTHROPIC_API_KEY ? 'configured' : 'NOT SET — AI responses disabled'}`);
   logger.info(`[QUANTUM Bot] Features: Zoho Outreach (3h escalation), Moderation (FB+IG)`);
 });
