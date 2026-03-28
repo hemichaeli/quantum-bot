@@ -241,12 +241,12 @@ router.get('/server-ip', async (req, res) => {
 router.get('/agents', (req, res) => {
   res.json({ success: true, agents: [
     { id: 'cold_prospecting',    name: 'Cold Prospecting',    hasAssistantId: !!process.env.VAPI_ASSISTANT_COLD },
-    { id: 'scheduling_followup', name: 'Scheduling Follow-up', hasAssistantId: !!process.env.VAPI_ASSISTANT_SCHEDULING },
+    { id: 'scheduling_followup', name: 'Scheduling Follow-up', hasAssistantId: !!SCHEDULING_ASSISTANT_ID },
     { id: 'buyer',               name: 'Buyer',               hasAssistantId: !!process.env.VAPI_ASSISTANT_BUYER },
     { id: 'seller',              name: 'Seller',              hasAssistantId: !!process.env.VAPI_ASSISTANT_SELLER },
     { id: 'inbound',             name: 'Inbound',             hasAssistantId: !!process.env.VAPI_ASSISTANT_INBOUND },
     { id: 'reminder',            name: 'Reminder',            hasAssistantId: !!process.env.VAPI_ASSISTANT_REMINDER },
-  ], vapiConfigured: !!process.env.VAPI_API_KEY, schedulingId: process.env.VAPI_ASSISTANT_SCHEDULING ? process.env.VAPI_ASSISTANT_SCHEDULING.substring(0,8)+'...' : null });
+  ], vapiConfigured: !!process.env.VAPI_API_KEY, schedulingId: SCHEDULING_ASSISTANT_ID ? SCHEDULING_ASSISTANT_ID.substring(0,8)+'...' : null });
 });
 
 router.get('/google-auth-status', async (req, res) => {
@@ -463,13 +463,16 @@ router.post('/test-sms', async (req, res) => {
 
 // ─── Outbound Call ─────────────────────────────────────────────────────────────
 
+// Fallback IDs for assistants that may not be set via env vars
+const SCHEDULING_ASSISTANT_ID = process.env.VAPI_ASSISTANT_SCHEDULING || '5ab9c2ef-bd7b-4496-9bf8-69437a8e93e8';
+
 const AGENTS_CONFIG = {
   cold_prospecting:    process.env.VAPI_ASSISTANT_COLD        || null,
   seller_followup:     process.env.VAPI_ASSISTANT_SELLER      || null,
   buyer_qualification: process.env.VAPI_ASSISTANT_BUYER       || null,
   meeting_reminder:    process.env.VAPI_ASSISTANT_REMINDER    || null,
   inbound_handler:     process.env.VAPI_ASSISTANT_INBOUND     || null,
-  scheduling_followup: process.env.VAPI_ASSISTANT_SCHEDULING  || null,  // NEW
+  scheduling_followup: SCHEDULING_ASSISTANT_ID,
 };
 
 router.post('/outbound', async (req, res) => {
