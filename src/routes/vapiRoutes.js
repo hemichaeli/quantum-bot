@@ -242,7 +242,11 @@ router.get('/agents', (req, res) => {
   res.json({ success: true, agents: [
     { id: 'cold_prospecting',    name: 'Cold Prospecting',    hasAssistantId: !!process.env.VAPI_ASSISTANT_COLD },
     { id: 'scheduling_followup', name: 'Scheduling Follow-up', hasAssistantId: !!process.env.VAPI_ASSISTANT_SCHEDULING },
-  ]});
+    { id: 'buyer',               name: 'Buyer',               hasAssistantId: !!process.env.VAPI_ASSISTANT_BUYER },
+    { id: 'seller',              name: 'Seller',              hasAssistantId: !!process.env.VAPI_ASSISTANT_SELLER },
+    { id: 'inbound',             name: 'Inbound',             hasAssistantId: !!process.env.VAPI_ASSISTANT_INBOUND },
+    { id: 'reminder',            name: 'Reminder',            hasAssistantId: !!process.env.VAPI_ASSISTANT_REMINDER },
+  ], vapiConfigured: !!process.env.VAPI_API_KEY, schedulingId: process.env.VAPI_ASSISTANT_SCHEDULING ? process.env.VAPI_ASSISTANT_SCHEDULING.substring(0,8)+'...' : null });
 });
 
 router.get('/google-auth-status', async (req, res) => {
