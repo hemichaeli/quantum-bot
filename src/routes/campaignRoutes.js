@@ -9,6 +9,7 @@ const pool    = require('../db/pool');
 const axios   = require('axios');
 const { logger } = require('../services/logger');
 const { buildWaMessages } = require('../services/ranScript');
+const { setZohoCampaignId } = require('../services/zohoCrmService');
 
 const INFORU_BASE = 'https://capi.inforu.co.il/api/v2';
 const VAPI_BASE   = 'https://api.vapi.ai';
@@ -303,7 +304,11 @@ router.post('/:id/leads', async (req, res) => {
           ON CONFLICT (campaign_id, phone) DO NOTHING
           RETURNING *
         `, [campaignId, l.phone, l.name || null, l.source || 'manual', l.lead_id || null]);
-        if (row) inserted.push(row);
+        if (row) {
+          inserted.push(row);
+          // Write QUANTUM_Campaign_ID to Zoho CRM if we have a zoho lead ID
+          if (l.zoho_id) setZohoCampaignId(l.zoho_id, campaignId).catch(() => {});
+        }
       } catch (e) {
         logger.warn(`[Campaign] Failed to insert lead ${l.phone}:`, e.message);
       }
@@ -363,8 +368,10 @@ router.post('/:id/leads/from-filter', async (req, res) => {
 
     params.push(limit);
     const query = `
-      SELECT l.id, l.phone, l.name, l.city, l.source, l.status, l.ssi_score
+      SELECT l.id, l.phone, l.name, l.city, l.source, l.status, l.ssi_score,
+             zl.zoho_id
       FROM leads l
+      LEFT JOIN zoho_leads zl ON zl.phone = l.phone
       WHERE ${conditions.join(' AND ')}
       ORDER BY l.ssi_score DESC NULLS LAST
       LIMIT $${params.length}
@@ -384,7 +391,11 @@ router.post('/:id/leads/from-filter', async (req, res) => {
           VALUES ($1, $2, $3, $4, $5)
           ON CONFLICT (campaign_id, phone) DO NOTHING
         `, [campaignId, l.phone, l.name || null, l.source || 'leads_db', l.id]);
-        if (rowCount > 0) inserted++;
+        if (rowCount > 0) {
+          inserted++;
+          // Write QUANTUM_Campaign_ID to Zoho CRM if lead has a zoho_id
+          if (l.zoho_id) setZohoCampaignId(l.zoho_id, campaignId).catch(() => {});
+        }
       } catch (e) {
         logger.warn(`[Campaign/filter] lead ${l.phone}:`, e.message);
       }

@@ -194,6 +194,34 @@ async function getLeadsReadyForEscalation() {
   return rows;
 }
 
+// ── Write QUANTUM Campaign ID to Zoho CRM ────────────────────────────────────
+
+/**
+ * Updates the QUANTUM_Campaign_ID custom field on a Zoho CRM Lead record.
+ * Called whenever a lead is added to a QUANTUM Bot campaign.
+ * @param {string} zohoLeadId  - The Zoho CRM lead record ID
+ * @param {string|number} campaignId - The QUANTUM Bot campaign ID (from local DB)
+ */
+async function setZohoCampaignId(zohoLeadId, campaignId) {
+  if (!zohoLeadId || !campaignId) return;
+  try {
+    const token = await getAccessToken();
+    const resp = await axios.put(
+      `${ZOHO_API_DOMAIN}/crm/v3/Leads/${zohoLeadId}`,
+      { data: [{ QUANTUM_Campaign_ID: String(campaignId) }] },
+      { headers: { Authorization: `Zoho-oauthtoken ${token}`, 'Content-Type': 'application/json' }, timeout: 10000 }
+    );
+    const result = resp.data?.data?.[0];
+    if (result?.code === 'SUCCESS') {
+      logger.info(`[ZohoCRM] Set QUANTUM_Campaign_ID=${campaignId} on lead ${zohoLeadId}`);
+    } else {
+      logger.warn(`[ZohoCRM] setZohoCampaignId unexpected response`, { zohoLeadId, campaignId, result });
+    }
+  } catch (err) {
+    logger.error(`[ZohoCRM] setZohoCampaignId failed`, { zohoLeadId, campaignId, error: err.message });
+  }
+}
+
 async function updateLeadStatus(id, status, extra = {}) {
   const updates = ['outreach_status = $1', 'updated_at = NOW()'];
   const values  = [status];
@@ -219,4 +247,5 @@ module.exports = {
   getLeadsReadyForEscalation,
   updateLeadStatus,
   ensureLeadsTable,
+  setZohoCampaignId,
 };
