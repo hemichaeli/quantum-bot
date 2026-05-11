@@ -445,6 +445,22 @@ router.post('/book-slot', async (req, res) => {
   }
 });
 
+// ─── Debug: test outbound call via placeVapiCall (uses VOICE_PROVIDER toggle) ─
+
+router.post('/test-realtime', async (req, res) => {
+  try {
+    const { phone, scriptType = 'general', leadName = 'בדיקה', leadCity } = req.body || {};
+    if (!phone) return res.status(400).json({ success: false, error: 'phone required' });
+    const { placeVapiCall } = require('../services/vapiCampaignService');
+    const result = await placeVapiCall({ phone, leadName, leadCity, scriptType });
+    logger.info(`[VAPI] test-realtime → ${result.callId} via ${result.provider}`);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    logger.error('[VAPI] test-realtime error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // ─── Debug: test SMS ───────────────────────────────────────────────────────────
 
 router.post('/test-sms', async (req, res) => {
