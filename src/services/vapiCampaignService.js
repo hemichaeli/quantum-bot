@@ -94,11 +94,75 @@ function buildFirstMessage(scriptType, leadName) {
   return messages[scriptType] || messages.general;
 }
 
+// ─── Voice/model provider selection ─────────────────────────────────────────
+// VOICE_PROVIDER env var picks the stack:
+//   "vapi-azure-haiku"     → Anthropic Haiku + Azure he-IL-AvriNeural + Deepgram nova-3   (default, cheap, native HE)
+//   "vapi-openai-realtime" → OpenAI gpt-realtime-2 speech-to-speech (single unified model) (smarter, pricier)
+// Toggle without redeploy by changing the env var.
+// OPENAI_REALTIME_MODEL overrides the model id (default: gpt-realtime-2).
+// OPENAI_VOICE_ID overrides the voice (default: cedar).
+
+const ENDCALL_PHRASES_HE = ['להתראות', 'ביי', 'שלום שלום', 'אני אחשוב על זה', 'לא מעוניין'];
+const KEYTERMS_HE        = ['QUANTUM', 'פינוי-בינוי', 'קוונטום', 'רן', 'דירה', 'נכס', 'מתחם'];
+
+function buildAssistantBlock(provider, { firstMessage, systemPrompt }) {
+  const common = {
+    name: 'רן',
+    firstMessage,
+    endCallPhrases: ENDCALL_PHRASES_HE,
+    maxDurationSeconds: 300
+  };
+
+  if (provider === 'vapi-openai-realtime') {
+    return {
+      ...common,
+      model: {
+        provider: 'openai',
+        model:    process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2',
+        messages: [{ role: 'system', content: systemPrompt }],
+        temperature: 0.8
+      },
+      voice: {
+        provider: 'openai',
+        voiceId:  process.env.OPENAI_VOICE_ID || 'cedar'
+      },
+      transcriber: {
+        provider: 'openai',
+        model:    'gpt-4o-transcribe',
+        language: 'he'
+      }
+    };
+  }
+
+  // Default: vapi-azure-haiku (existing, cheap, native-HE pipeline)
+  return {
+    ...common,
+    model: {
+      provider: 'anthropic',
+      model:    'claude-3-haiku-20240307',
+      messages: [{ role: 'system', content: systemPrompt }],
+      maxTokens: 200,
+      temperature: 0.7
+    },
+    voice: {
+      provider: 'azure',
+      voiceId:  'he-IL-AvriNeural'
+    },
+    transcriber: {
+      provider: 'deepgram',
+      model:    'nova-3',
+      language: 'he',
+      keyterms: KEYTERMS_HE
+    }
+  };
+}
+
 // ─── שיחת Vapi ──────────────────────────────────────────────────────────────
 
 async function placeVapiCall({ phone, leadName, leadCity, scriptType = 'general', campaignLeadId, campaignId }) {
   const apiKey     = process.env.VAPI_API_KEY;
   const phoneNumId = process.env.VAPI_PHONE_NUMBER_ID;
+  const provider   = process.env.VOICE_PROVIDER || 'vapi-azure-haiku';
 
   if (!apiKey)     throw new Error('VAPI_API_KEY not set');
   if (!phoneNumId) throw new Error('VAPI_PHONE_NUMBER_ID not set');
@@ -118,33 +182,12 @@ async function placeVapiCall({ phone, leadName, leadCity, scriptType = 'general'
       number: e164,
       name:   leadName || 'לקוח'
     },
-    assistant: {
-      name:           'רן',
-      firstMessage,
-      model: {
-        provider: 'anthropic',
-        model:    'claude-3-haiku-20240307',
-        messages: [{ role: 'system', content: systemPrompt }],
-        maxTokens: 200,
-        temperature: 0.7
-      },
-      voice: {
-        provider: 'azure',
-        voiceId:  'he-IL-AvriNeural'
-      },
-      transcriber: {
-        provider: 'deepgram',
-        model:    'nova-3',
-        language: 'he',
-        keyterms: ['QUANTUM', 'פינוי-בינוי', 'קוונטום', 'רן', 'דירה', 'נכס', 'מתחם']
-      },
-      endCallPhrases: ['להתראות', 'ביי', 'שלום שלום', 'אני אחשוב על זה', 'לא מעוניין'],
-      maxDurationSeconds: 300
-    },
+    assistant: buildAssistantBlock(provider, { firstMessage, systemPrompt }),
     metadata: {
       campaign_lead_id: campaignLeadId?.toString(),
       campaign_id:      campaignId?.toString(),
-      quantum_source:   'campaign_manager'
+      quantum_source:   'campaign_manager',
+      voice_provider:   provider
     }
   };
 
@@ -156,7 +199,8 @@ async function placeVapiCall({ phone, leadName, leadCity, scriptType = 'general'
   return {
     callId:  response.data.id,
     status:  response.data.status,
-    e164
+    e164,
+    provider
   };
 }
 
@@ -173,4 +217,4 @@ function buildWaFirstMessage(scriptType, leadName) {
   return messages[scriptType] || messages.general;
 }
 
-module.exports = { placeVapiCall, buildWaFirstMessage, buildSystemPrompt, buildFirstMessage };
+module.exports = { placeVapiCall, buildWaFirstMessage, buildSystemPrompt, buildFirstMessage, buildAssistantBlock };
