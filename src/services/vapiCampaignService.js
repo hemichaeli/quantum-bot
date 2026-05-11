@@ -114,16 +114,16 @@ function buildAssistantBlock(provider, { firstMessage, systemPrompt }) {
   };
 
   if (provider === 'vapi-openai-realtime') {
-    // For OpenAI Realtime, the model is speech-to-speech — VAPI rejects an external
-    // voice/transcriber provider for these models. Voice is configured inside the model.
+    // For OpenAI Realtime: VAPI rejects external voice/transcriber providers AND
+    // rejects model.voice. Voice selection for realtime is controlled by VAPI itself
+    // (defaults to the model's voice). Pass only model + messages.
     return {
       ...common,
       model: {
         provider: 'openai',
-        model:    process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2',
+        model:    process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2025-08-28',
         messages: [{ role: 'system', content: systemPrompt }],
-        temperature: 0.8,
-        voice:    process.env.OPENAI_VOICE_ID || 'cedar'
+        temperature: 0.8
       }
     };
   }
