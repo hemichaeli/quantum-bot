@@ -145,8 +145,8 @@ function buildAssistantBlock(provider, { firstMessage, systemPrompt }) {
     transcriber: {
       provider: 'deepgram',
       model:    'nova-3',
-      language: 'he',
-      keyterms: KEYTERMS_HE
+      language: 'he'
+      // VAPI removed support for transcriber.keyterms — do not add it back
     }
   };
 }
