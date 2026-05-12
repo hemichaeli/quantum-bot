@@ -47,10 +47,12 @@ function handleConnection(twilioWs, ctx = {}) {
   }
 
   // ───────────────────── OpenAI side ─────────────────────
+  // gpt-realtime-2 (2026-05) requires the GA Realtime API — drop the OpenAI-Beta header.
+  // Older models (gpt-realtime, gpt-4o-realtime-preview-*) accept both, so removing the
+  // header is safe across the board.
   openaiWs = new WebSocket(OPENAI_REALTIME_URL, {
     headers: {
-      Authorization: `Bearer ${openaiApiKey}`,
-      'OpenAI-Beta': 'realtime=v1'
+      Authorization: `Bearer ${openaiApiKey}`
     }
   });
 
