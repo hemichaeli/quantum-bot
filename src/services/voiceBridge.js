@@ -75,8 +75,10 @@ function handleConnection(twilioWs, ctx = {}) {
     let evt;
     try { evt = JSON.parse(raw.toString()); } catch { return; }
 
+    // GA API renamed several event types - accept both old and new names.
     switch (evt.type) {
       case 'response.audio.delta':
+      case 'response.output_audio.delta':
         // OpenAI sends base64 μ-law 8kHz. Forward to Twilio as media frame.
         if (streamSid && evt.delta) {
           twilioWs.send(JSON.stringify({
@@ -88,11 +90,12 @@ function handleConnection(twilioWs, ctx = {}) {
         break;
 
       case 'response.audio_transcript.delta':
-        // assistant transcript chunks - accumulate
-        // (handled at .done for cleaner record)
+      case 'response.output_audio_transcript.delta':
+        // accumulate via .done event for cleaner record
         break;
 
       case 'response.audio_transcript.done':
+      case 'response.output_audio_transcript.done':
         if (evt.transcript) transcript.push({ role: 'assistant', text: evt.transcript });
         break;
 
@@ -104,12 +107,16 @@ function handleConnection(twilioWs, ctx = {}) {
         await handleFunctionCall(openaiWs, evt, { callId, sellerPhone, ctx, transcript, markSummarySent: () => { summarySent = true; } });
         break;
 
+      case 'session.created':
+      case 'session.updated':
+        logger.info(`[voiceBridge:${callId}] ${evt.type}`);
+        break;
+
       case 'error':
         logger.error(`[voiceBridge:${callId}] OpenAI error`, evt.error || evt);
         break;
 
       case 'input_audio_buffer.speech_started':
-        // Caller started speaking - cancel any ongoing assistant response (interruption)
         try {
           twilioWs.send(JSON.stringify({ event: 'clear', streamSid }));
           openaiWs.send(JSON.stringify({ type: 'response.cancel' }));

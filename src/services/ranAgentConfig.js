@@ -95,25 +95,36 @@ const TOOLS = [
 ];
 
 function buildSessionConfig({ leadName, city, listingUrl }) {
+  // GA Realtime API session schema (required for gpt-realtime-2).
+  // Differs from beta: needs session.type='realtime', nested audio object,
+  // output_modalities (not modalities), max_output_tokens (not max_response_output_tokens).
   return {
     type: 'session.update',
     session: {
-      modalities: ['audio', 'text'],
+      type: 'realtime',
+      model: RAN_MODEL,
+      output_modalities: ['audio'],
       instructions: buildSystemPrompt({ leadName, city, listingUrl }),
-      voice: RAN_VOICE,
-      input_audio_format: 'g711_ulaw',
-      output_audio_format: 'g711_ulaw',
-      input_audio_transcription: { model: 'whisper-1' },
-      turn_detection: {
-        type: 'server_vad',
-        threshold: 0.5,
-        prefix_padding_ms: 300,
-        silence_duration_ms: 500
+      audio: {
+        input: {
+          format: { type: 'audio/pcmu' },
+          transcription: { model: 'whisper-1' },
+          turn_detection: {
+            type: 'server_vad',
+            threshold: 0.5,
+            prefix_padding_ms: 300,
+            silence_duration_ms: 500
+          }
+        },
+        output: {
+          format: { type: 'audio/pcmu' },
+          voice: RAN_VOICE,
+          speed: 1.0
+        }
       },
       tools: TOOLS,
       tool_choice: 'auto',
-      temperature: 0.7,
-      max_response_output_tokens: 4096
+      max_output_tokens: 4096
     }
   };
 }
