@@ -627,6 +627,8 @@ router.get('/stats', async (req, res) => {
   } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+// expose helpers so the new voiceBridge can call them directly
+router.fetchFreeSlots = fetchFreeSlots;
 module.exports = router;
 // VAPI_ASSISTANT_SCHEDULING env var refresh: Sat Mar 28 18:53:52 EDT 2026
 

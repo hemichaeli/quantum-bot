@@ -18,6 +18,9 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const cron = require('node-cron');
+const http = require('http');
+const WebSocket = require('ws');
+const url = require('url');
 const { logger } = require('./services/logger');
 
 const app = express();
@@ -61,6 +64,9 @@ app.use('/api/zoho-outreach', require('./routes/zohoOutreachRoutes'));
 
 // New: Social Media Moderation
 app.use('/api/moderation',    require('./routes/moderationRoutes'));
+
+// New: direct Twilio voice (no VAPI) — Realtime bridge
+app.use('/api/twilio/voice',  require('./routes/twilioVoiceRoutes'));
 
 // ── Scheduled Jobs ────────────────────────────────────────────────────────────
 
@@ -201,12 +207,35 @@ setTimeout(() => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
+const server = http.createServer(app);
+
+// ── WebSocket upgrade for Twilio Media Streams ────────────────────────────────
+// Twilio opens a WS to /api/twilio/voice/stream with <Parameter> values as query.
+const wss = new WebSocket.Server({ noServer: true });
+let voiceBridge = null;
+try { voiceBridge = require('./services/voiceBridge'); }
+catch (err) { logger.warn('[QUANTUM Bot] voiceBridge not loaded:', err.message); }
+
+server.on('upgrade', (req, socket, head) => {
+  const parsed = url.parse(req.url, true);
+  if (parsed.pathname === '/api/twilio/voice/stream') {
+    if (!voiceBridge) { socket.destroy(); return; }
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      // Twilio includes <Parameter name="x" value="y"/> as customParameters in the start event,
+      // but we also accept context via URL query for redundancy.
+      voiceBridge.handleConnection(ws, parsed.query || {});
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+server.listen(PORT, () => {
   logger.info(`[QUANTUM Bot] Running on port ${PORT}`);
   logger.info(`[QUANTUM Bot] Business line: ${process.env.INFORU_BUSINESS_LINE || '037572229'}`);
   logger.info(`[QUANTUM Bot] VAPI: ${process.env.VAPI_PHONE_NUMBER_ID ? 'configured' : 'NOT SET — outbound calls disabled'}`);
-  logger.info(`[QUANTUM Bot] VAPI_ASSISTANT_SCHEDULING: ${process.env.VAPI_ASSISTANT_SCHEDULING || 'NOT SET'}`);
-  logger.info(`[QUANTUM Bot] VAPI_ASSISTANT_COLD: ${process.env.VAPI_ASSISTANT_COLD ? process.env.VAPI_ASSISTANT_COLD.substring(0,8)+'...' : 'NOT SET'}`);
-  logger.info(`[QUANTUM Bot] Claude: ${process.env.ANTHROPIC_API_KEY ? 'configured' : 'NOT SET — AI responses disabled'}`);
-  logger.info(`[QUANTUM Bot] Features: Zoho Outreach (3h escalation), Moderation (FB+IG)`);
+  logger.info(`[QUANTUM Bot] Twilio direct: ${process.env.TWILIO_ACCOUNT_SID ? 'configured' : 'NOT SET'} (FROM=${process.env.TWILIO_FROM_NUMBER || 'unset'})`);
+  logger.info(`[QUANTUM Bot] OpenAI Realtime: ${process.env.OPENAI_API_KEY ? 'key set, model=' + (process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime-2') : 'NOT SET'}`);
+  logger.info(`[QUANTUM Bot] Claude: ${process.env.ANTHROPIC_API_KEY ? 'configured' : 'NOT SET'}`);
+  logger.info(`[QUANTUM Bot] Features: Zoho Outreach (3h escalation), Moderation, Voice Bridge (direct Twilio+OpenAI)`);
 });
