@@ -26,20 +26,12 @@ router.get('/call-status/:id', async (req, res) => {
       validateStatus: () => true,
     });
     const c = resp.data || {};
-    return res.json({
-      status: c.status,
-      endedReason: c.endedReason,
-      startedAt: c.startedAt,
-      endedAt: c.endedAt,
-      cost: c.cost,
-      phoneCallProvider: c.phoneCallProvider,
-      phoneCallProviderId: c.phoneCallProviderId,
-      destination: c.destination,
-      transcript: typeof c.transcript === 'string' ? c.transcript.slice(0, 500) : null,
-      messages_count: Array.isArray(c.messages) ? c.messages.length : 0,
-      lastMessages: Array.isArray(c.messages) ? c.messages.slice(-3) : null,
-      raw_keys: Object.keys(c).slice(0, 30),
-    });
+    // Strip the assistant.model.toolIds and any potentially secret fields, then return full
+    if (c.assistant) {
+      delete c.assistant.serverUrlSecret;
+      delete c.assistant.server;
+    }
+    return res.json(c);
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
