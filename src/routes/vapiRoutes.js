@@ -16,6 +16,24 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://pinuy-binuy-analyzer-production.up.railway.app';
 
+// GET /api/vapi/admin/phone-numbers - list VAPI phone numbers + their Twilio account binding
+router.get('/admin/phone-numbers', async (req, res) => {
+  if (req.query.key !== 'quantum-otp-diag-2026') return res.status(403).json({ error: 'forbidden' });
+  if (!VAPI_API_KEY) return res.status(500).json({ error: 'VAPI_API_KEY not configured' });
+  try {
+    const r = await axios.get('https://api.vapi.ai/phone-number', {
+      headers: { Authorization: `Bearer ${VAPI_API_KEY}` },
+      validateStatus: () => true,
+    });
+    const list = (r.data || []).map(n => ({
+      id: n.id, name: n.name, number: n.number, provider: n.provider,
+      twilioAccountSid: n.twilioAccountSid, status: n.status,
+      assistantId: n.assistantId,
+    }));
+    return res.json(list);
+  } catch (err) { return res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/vapi/admin/send-test-otp - one-shot diagnostic to send Web OTP-format SMS.
 // Body: { phone, key, channel? }. channel: "inforu" (default) | "twilio".
 // Returns the generated code so the requester can verify autofill UX.
