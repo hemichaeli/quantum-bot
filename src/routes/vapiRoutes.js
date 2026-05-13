@@ -531,14 +531,16 @@ router.post('/book-slot', async (req, res) => {
 
 router.post('/test-realtime', async (req, res) => {
   // Body may override env defaults so we can iterate models without redeploy.
-  const { phone, scriptType = 'general', leadName = 'בדיקה', leadCity, model, voice, provider } = req.body || {};
+  const { phone, scriptType = 'general', leadName = 'בדיקה', leadCity, model, voice, provider, phoneNumberId } = req.body || {};
   if (!phone) return res.status(400).json({ success: false, error: 'phone required' });
   const prevModel    = process.env.OPENAI_REALTIME_MODEL;
   const prevVoice    = process.env.OPENAI_VOICE_ID;
   const prevProvider = process.env.VOICE_PROVIDER;
-  if (model)    process.env.OPENAI_REALTIME_MODEL = model;
-  if (voice)    process.env.OPENAI_VOICE_ID = voice;
-  if (provider) process.env.VOICE_PROVIDER = provider;
+  const prevPhoneId  = process.env.VAPI_PHONE_NUMBER_ID;
+  if (model)         process.env.OPENAI_REALTIME_MODEL = model;
+  if (voice)         process.env.OPENAI_VOICE_ID = voice;
+  if (provider)      process.env.VOICE_PROVIDER = provider;
+  if (phoneNumberId) process.env.VAPI_PHONE_NUMBER_ID = phoneNumberId;
   try {
     const { placeVapiCall } = require('../services/vapiCampaignService');
     const result = await placeVapiCall({ phone, leadName, leadCity, scriptType });
@@ -549,6 +551,7 @@ router.post('/test-realtime', async (req, res) => {
     logger.error('[VAPI] test-realtime error:', err.message, vapiBody ? JSON.stringify(vapiBody) : '');
     res.status(500).json({ success: false, error: err.message, vapi: vapiBody });
   } finally {
+    if (phoneNumberId) { if (prevPhoneId !== undefined) process.env.VAPI_PHONE_NUMBER_ID = prevPhoneId; else delete process.env.VAPI_PHONE_NUMBER_ID; }
     if (model)    { if (prevModel    !== undefined) process.env.OPENAI_REALTIME_MODEL = prevModel; else delete process.env.OPENAI_REALTIME_MODEL; }
     if (voice)    { if (prevVoice    !== undefined) process.env.OPENAI_VOICE_ID       = prevVoice; else delete process.env.OPENAI_VOICE_ID; }
     if (provider) { if (prevProvider !== undefined) process.env.VOICE_PROVIDER        = prevProvider; else delete process.env.VOICE_PROVIDER; }
