@@ -16,6 +16,35 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://pinuy-binuy-analyzer-production.up.railway.app';
 
+// GET /api/vapi/call-status/:id - diagnostic endpoint for inspecting test-realtime call outcomes.
+// Uses existing VAPI_API_KEY server-side. Does not expose the key in any response.
+router.get('/call-status/:id', async (req, res) => {
+  if (!VAPI_API_KEY) return res.status(500).json({ error: 'VAPI_API_KEY not configured' });
+  try {
+    const resp = await axios.get(`https://api.vapi.ai/call/${req.params.id}`, {
+      headers: { Authorization: `Bearer ${VAPI_API_KEY}` },
+      validateStatus: () => true,
+    });
+    const c = resp.data || {};
+    return res.json({
+      status: c.status,
+      endedReason: c.endedReason,
+      startedAt: c.startedAt,
+      endedAt: c.endedAt,
+      cost: c.cost,
+      phoneCallProvider: c.phoneCallProvider,
+      phoneCallProviderId: c.phoneCallProviderId,
+      destination: c.destination,
+      transcript: typeof c.transcript === 'string' ? c.transcript.slice(0, 500) : null,
+      messages_count: Array.isArray(c.messages) ? c.messages.length : 0,
+      lastMessages: Array.isArray(c.messages) ? c.messages.slice(-3) : null,
+      raw_keys: Object.keys(c).slice(0, 30),
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Google Service Account Auth ──────────────────────────────────────────────
 
 let _googleAuthClient = null;
