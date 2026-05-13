@@ -16,18 +16,44 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://pinuy-binuy-analyzer-production.up.railway.app';
 
-// POST /api/vapi/admin/send-test-otp - one-shot diagnostic to send Web OTP-format SMS via INFORU.
-// Body: { phone, key }. Returns the generated code so the requester can verify autofill UX.
+// POST /api/vapi/admin/send-test-otp - one-shot diagnostic to send Web OTP-format SMS.
+// Body: { phone, key, channel? }. channel: "inforu" (default) | "twilio".
+// Returns the generated code so the requester can verify autofill UX.
 router.post('/admin/send-test-otp', async (req, res) => {
-  const { phone, key } = req.body || {};
+  const { phone, key, channel = 'inforu' } = req.body || {};
   if (key !== 'quantum-otp-diag-2026') return res.status(403).json({ error: 'forbidden' });
   if (!phone) return res.status(400).json({ error: 'phone required' });
+  const code = String(100000 + Math.floor(Math.random() * 900000));
+  const body = `${code} is your QUANTUM verification code.\n\n@u-r-quantum.com #${code}`;
   try {
-    const inforu = require('../services/inforuService');
-    const code = String(100000 + Math.floor(Math.random() * 900000));
-    const body = `${code} is your QUANTUM verification code.\n\n@u-r-quantum.com #${code}`;
-    const r = await inforu.sendSms(phone, body, { senderName: 'QUANTUM' });
-    return res.json({ success: r.success, code, sentTo: phone, status: r.status, description: r.description });
+    if (channel === 'twilio') {
+      const sid = process.env.TWILIO_ACCOUNT_SID;
+      const token = process.env.TWILIO_AUTH_TOKEN;
+      if (!sid || !token) return res.status(500).json({ error: 'Twilio not configured' });
+      const e164 = phone.startsWith('+') ? phone : (phone.startsWith('0') ? '+972' + phone.slice(1) : '+' + phone);
+      const form = new URLSearchParams();
+      form.set('To', e164);
+      form.set('From', 'QUANTUM');
+      form.set('Body', body);
+      const auth = 'Basic ' + Buffer.from(`${sid}:${token}`).toString('base64');
+      const r = await axios.post(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`,
+        form.toString(),
+        { headers: { Authorization: auth, 'Content-Type': 'application/x-www-form-urlencoded' }, validateStatus: () => true });
+      return res.json({
+        channel: 'twilio',
+        success: r.status >= 200 && r.status < 300,
+        code,
+        sentTo: e164,
+        status: r.data?.status,
+        twilioSid: r.data?.sid,
+        errorCode: r.data?.error_code,
+        errorMessage: r.data?.message,
+      });
+    } else {
+      const inforu = require('../services/inforuService');
+      const r = await inforu.sendSms(phone, body, { senderName: 'QUANTUM' });
+      return res.json({ channel: 'inforu', success: r.success, code, sentTo: phone, status: r.status, description: r.description });
+    }
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
