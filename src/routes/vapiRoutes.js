@@ -16,6 +16,23 @@ const BASE_URL = process.env.RAILWAY_PUBLIC_DOMAIN
   ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
   : 'https://pinuy-binuy-analyzer-production.up.railway.app';
 
+// POST /api/vapi/admin/send-test-otp - one-shot diagnostic to send Web OTP-format SMS via INFORU.
+// Body: { phone, key }. Returns the generated code so the requester can verify autofill UX.
+router.post('/admin/send-test-otp', async (req, res) => {
+  const { phone, key } = req.body || {};
+  if (key !== 'quantum-otp-diag-2026') return res.status(403).json({ error: 'forbidden' });
+  if (!phone) return res.status(400).json({ error: 'phone required' });
+  try {
+    const inforu = require('../services/inforuService');
+    const code = String(100000 + Math.floor(Math.random() * 900000));
+    const body = `${code} is your QUANTUM verification code.\n\n@u-r-quantum.com #${code}`;
+    const r = await inforu.sendSms(phone, body, { senderName: 'QUANTUM' });
+    return res.json({ success: r.success, code, sentTo: phone, status: r.status, description: r.description });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/vapi/call-status/:id - diagnostic endpoint for inspecting test-realtime call outcomes.
 // Uses existing VAPI_API_KEY server-side. Does not expose the key in any response.
 router.get('/call-status/:id', async (req, res) => {
