@@ -24,6 +24,7 @@ const { logger } = require('./logger');
 const META_ACCESS_TOKEN  = process.env.META_ACCESS_TOKEN  || '';
 const META_FB_PAGE_ID    = process.env.META_FB_PAGE_ID    || '';
 const META_IG_ACCOUNT_ID = process.env.META_IG_ACCOUNT_ID || '';
+const META_AD_ACCOUNT_ID = process.env.META_AD_ACCOUNT_ID || '1614781956446185'; // for comments on ad/dark posts
 const OPENAI_API_KEY     = process.env.OPENAI_API_KEY     || '';
 const AUTOREPLY          = (process.env.MODERATION_AUTOREPLY || 'on').toLowerCase() !== 'off';
 const MAX_PER_RUN        = parseInt(process.env.MODERATION_MAX_PER_RUN || '5', 10); // drip slowly, not all at once
@@ -87,6 +88,28 @@ async function fetchIGComments() {
     }
     return out;
   } catch (err) { logger.error('[Moderation] IG fetch error:', err.response?.data ? JSON.stringify(err.response.data) : err.message); return []; }
+}
+
+// ── Meta Graph: fetch comments on AD / dark posts ─────────────────────────────
+async function fetchAdComments() {
+  if (!META_ACCESS_TOKEN || !META_AD_ACCOUNT_ID) return [];
+  const acct = META_AD_ACCOUNT_ID.startsWith('act_') ? META_AD_ACCOUNT_ID : `act_${META_AD_ACCOUNT_ID}`;
+  try {
+    const adsResp = await axios.get(`${GRAPH}/${acct}/ads`, {
+      params: { access_token: META_ACCESS_TOKEN, fields: 'creative{effective_object_story_id}', limit: 300 }, timeout: 20000,
+    });
+    const ids = [...new Set((adsResp.data?.data || []).map(a => a.creative?.effective_object_story_id).filter(Boolean))];
+    const out = [];
+    for (const id of ids) {
+      try {
+        const c = await axios.get(`${GRAPH}/${id}/comments`, {
+          params: { access_token: META_ACCESS_TOKEN, fields: 'id,message,from,created_time', filter: 'stream', limit: 100 }, timeout: 12000,
+        });
+        for (const cm of c.data?.data || []) out.push({ platform: 'facebook', comment_id: cm.id, post_id: id, user_id: cm.from?.id || null, user_name: cm.from?.name || null, text: cm.message || '' });
+      } catch (e) { /* skip a single post on error */ }
+    }
+    return out;
+  } catch (err) { logger.error('[Moderation] ad fetch error: ' + (err.response?.data ? JSON.stringify(err.response.data) : err.message)); return []; }
 }
 
 // ── Classify (OpenAI) ─────────────────────────────────────────────────────────
@@ -184,9 +207,10 @@ async function hideAndBlockComment(commentId, platform, userId) {
 // ── Main scan: reply to hostile + positive, hide spam ─────────────────────────
 async function runModerationScan() {
   await ensureModerationTable();
-  const [fb, ig] = await Promise.all([fetchFBComments(), fetchIGComments()]);
-  const all = [...fb, ...ig];
-  logger.info(`[Moderation] scanning ${all.length} comments (FB:${fb.length} IG:${ig.length}) autoreply=${AUTOREPLY}`);
+  const [fb, ig, ad] = await Promise.all([fetchFBComments(), fetchIGComments(), fetchAdComments()]);
+  const seenIds = new Set();
+  const all = [...fb, ...ig, ...ad].filter(c => c.comment_id && !seenIds.has(c.comment_id) && seenIds.add(c.comment_id));
+  logger.info(`[Moderation] scanning ${all.length} comments (FB:${fb.length} IG:${ig.length} ADS:${ad.length}) autoreply=${AUTOREPLY}`);
   let replied = 0, hidden = 0, skipped = 0;
 
   for (const c of all) {
