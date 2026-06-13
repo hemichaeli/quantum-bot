@@ -69,7 +69,7 @@ async function fetchFBComments() {
       for (const cm of c.data?.data || []) out.push({ platform: 'facebook', comment_id: cm.id, post_id: post.id, user_id: cm.from?.id || null, user_name: cm.from?.name || null, text: cm.message || '' });
     }
     return out;
-  } catch (err) { logger.error('[Moderation] FB fetch error:', err.message); return []; }
+  } catch (err) { logger.error('[Moderation] FB fetch error:', err.response?.data ? JSON.stringify(err.response.data) : err.message); return []; }
 }
 
 async function fetchIGComments() {
@@ -86,7 +86,7 @@ async function fetchIGComments() {
       for (const cm of c.data?.data || []) out.push({ platform: 'instagram', comment_id: cm.id, post_id: post.id, user_id: null, user_name: cm.username || null, text: cm.text || '' });
     }
     return out;
-  } catch (err) { logger.error('[Moderation] IG fetch error:', err.message); return []; }
+  } catch (err) { logger.error('[Moderation] IG fetch error:', err.response?.data ? JSON.stringify(err.response.data) : err.message); return []; }
 }
 
 // ── Classify (OpenAI) ─────────────────────────────────────────────────────────
