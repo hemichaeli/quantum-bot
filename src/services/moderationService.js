@@ -1,11 +1,20 @@
 /**
- * QUANTUM Moderation Bot — Social Media Moderation Service
+ * QUANTUM Moderation Bot — Social Media ENGAGEMENT Service
  *
- * Scans Facebook Page and Instagram comments for negative/offensive content.
- * Uses GPT to classify comments.
- * Sends email to hemi.michaeli@gmail.com for approval before hiding + blocking.
+ * NEW BEHAVIOR (2026-06-13): instead of hiding/blocking hostile commenters, the bot
+ * REPLIES — calmly, in the commenter's own language — to antisemitic / anti-Israel /
+ * "Free Palestine" / "genocide" / "baby killer" comments, and warmly to supportive ones.
+ * Replies are measured and NEVER inflammatory. Spam is still hidden.
  *
- * Platforms: Facebook Page + Instagram Business Account (via Meta Graph API)
+ * Talking points (calm, defensible, dignified — never cruel):
+ *   - Israel defends itself; it is only "aggressive" toward those who attack it.
+ *   - The Jewish people has only ONE state in the world; other peoples have many.
+ *   - We genuinely want peace. The path to peace: those attacking us lay down their
+ *     weapons and stop attacking. Everyone here — Israeli and Palestinian — deserves
+ *     to live in safety and dignity.
+ *
+ * Kill switch: set MODERATION_AUTOREPLY=off to stop posting (still classifies + logs).
+ * Platforms: Facebook Page + Instagram (Meta Graph API). Token already in env.
  */
 
 const axios  = require('axios');
@@ -16,12 +25,11 @@ const META_ACCESS_TOKEN  = process.env.META_ACCESS_TOKEN  || '';
 const META_FB_PAGE_ID    = process.env.META_FB_PAGE_ID    || '';
 const META_IG_ACCOUNT_ID = process.env.META_IG_ACCOUNT_ID || '';
 const OPENAI_API_KEY     = process.env.OPENAI_API_KEY     || '';
-const APPROVAL_EMAIL     = process.env.MODERATION_APPROVAL_EMAIL || 'hemi.michaeli@gmail.com';
-const SENDGRID_API_KEY   = process.env.SENDGRID_API_KEY   || '';
-const FROM_EMAIL         = process.env.FROM_EMAIL         || 'bot@minhelet.org';
+const AUTOREPLY          = (process.env.MODERATION_AUTOREPLY || 'on').toLowerCase() !== 'off';
+const MAX_PER_RUN        = parseInt(process.env.MODERATION_MAX_PER_RUN || '5', 10); // drip slowly, not all at once
+const GRAPH              = 'https://graph.facebook.com/v19.0';
 
-// ── DB Setup ──────────────────────────────────────────────────────────────────
-
+// ── DB ──────────────────────────────────────────────────────────────────────
 async function ensureModerationTable() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS moderation_queue (
@@ -40,357 +48,175 @@ async function ensureModerationTable() {
       created_at      TIMESTAMP DEFAULT NOW()
     )
   `);
+  // new columns for the engagement flow (idempotent)
+  await pool.query(`ALTER TABLE moderation_queue ADD COLUMN IF NOT EXISTS category TEXT`);
+  await pool.query(`ALTER TABLE moderation_queue ADD COLUMN IF NOT EXISTS lang TEXT`);
+  await pool.query(`ALTER TABLE moderation_queue ADD COLUMN IF NOT EXISTS reply_text TEXT`);
 }
 
-// ── Meta Graph API ────────────────────────────────────────────────────────────
-
+// ── Meta Graph: fetch ─────────────────────────────────────────────────────────
 async function fetchFBComments() {
   if (!META_ACCESS_TOKEN || !META_FB_PAGE_ID) return [];
-
   try {
-    // Get recent posts
-    const postsResp = await axios.get(
-      `https://graph.facebook.com/v19.0/${META_FB_PAGE_ID}/posts`,
-      {
-        params: {
-          access_token: META_ACCESS_TOKEN,
-          fields: 'id,message,created_time',
-          limit: 10,
-        },
-        timeout: 10000,
-      }
-    );
-
-    const posts = postsResp.data?.data || [];
-    const allComments = [];
-
-    for (const post of posts) {
-      const commentsResp = await axios.get(
-        `https://graph.facebook.com/v19.0/${post.id}/comments`,
-        {
-          params: {
-            access_token: META_ACCESS_TOKEN,
-            fields: 'id,message,from,created_time',
-            limit: 50,
-          },
-          timeout: 10000,
-        }
-      );
-
-      const comments = commentsResp.data?.data || [];
-      for (const c of comments) {
-        allComments.push({
-          platform:   'facebook',
-          comment_id: c.id,
-          post_id:    post.id,
-          user_id:    c.from?.id || null,
-          user_name:  c.from?.name || null,
-          text:       c.message || '',
-          created_at: c.created_time,
-        });
-      }
+    const postsResp = await axios.get(`${GRAPH}/${META_FB_PAGE_ID}/posts`, {
+      params: { access_token: META_ACCESS_TOKEN, fields: 'id,message,created_time', limit: 10 }, timeout: 10000,
+    });
+    const out = [];
+    for (const post of postsResp.data?.data || []) {
+      const c = await axios.get(`${GRAPH}/${post.id}/comments`, {
+        params: { access_token: META_ACCESS_TOKEN, fields: 'id,message,from,created_time', limit: 50 }, timeout: 10000,
+      });
+      for (const cm of c.data?.data || []) out.push({ platform: 'facebook', comment_id: cm.id, post_id: post.id, user_id: cm.from?.id || null, user_name: cm.from?.name || null, text: cm.message || '' });
     }
-
-    return allComments;
-  } catch (err) {
-    logger.error('[Moderation] FB fetch error:', err.message);
-    return [];
-  }
+    return out;
+  } catch (err) { logger.error('[Moderation] FB fetch error:', err.message); return []; }
 }
 
 async function fetchIGComments() {
   if (!META_ACCESS_TOKEN || !META_IG_ACCOUNT_ID) return [];
-
   try {
-    // Get recent IG media
-    const mediaResp = await axios.get(
-      `https://graph.facebook.com/v19.0/${META_IG_ACCOUNT_ID}/media`,
-      {
-        params: {
-          access_token: META_ACCESS_TOKEN,
-          fields: 'id,caption,timestamp',
-          limit: 10,
-        },
-        timeout: 10000,
-      }
-    );
-
-    const media = mediaResp.data?.data || [];
-    const allComments = [];
-
-    for (const post of media) {
-      const commentsResp = await axios.get(
-        `https://graph.facebook.com/v19.0/${post.id}/comments`,
-        {
-          params: {
-            access_token: META_ACCESS_TOKEN,
-            fields: 'id,text,username,timestamp',
-            limit: 50,
-          },
-          timeout: 10000,
-        }
-      );
-
-      const comments = commentsResp.data?.data || [];
-      for (const c of comments) {
-        allComments.push({
-          platform:   'instagram',
-          comment_id: c.id,
-          post_id:    post.id,
-          user_id:    null,
-          user_name:  c.username || null,
-          text:       c.text || '',
-          created_at: c.timestamp,
-        });
-      }
+    const mediaResp = await axios.get(`${GRAPH}/${META_IG_ACCOUNT_ID}/media`, {
+      params: { access_token: META_ACCESS_TOKEN, fields: 'id,caption,timestamp', limit: 10 }, timeout: 10000,
+    });
+    const out = [];
+    for (const post of mediaResp.data?.data || []) {
+      const c = await axios.get(`${GRAPH}/${post.id}/comments`, {
+        params: { access_token: META_ACCESS_TOKEN, fields: 'id,text,username,timestamp', limit: 50 }, timeout: 10000,
+      });
+      for (const cm of c.data?.data || []) out.push({ platform: 'instagram', comment_id: cm.id, post_id: post.id, user_id: null, user_name: cm.username || null, text: cm.text || '' });
     }
-
-    return allComments;
-  } catch (err) {
-    logger.error('[Moderation] IG fetch error:', err.message);
-    return [];
-  }
+    return out;
+  } catch (err) { logger.error('[Moderation] IG fetch error:', err.message); return []; }
 }
 
-// ── AI Classification ─────────────────────────────────────────────────────────
-
+// ── Classify (OpenAI) ─────────────────────────────────────────────────────────
 async function classifyComment(text) {
-  if (!OPENAI_API_KEY) {
-    // Fallback: keyword-based classification
-    return keywordClassify(text);
-  }
-
+  if (!OPENAI_API_KEY) return keywordClassify(text);
   try {
-    const resp = await axios.post(
-      'https://api.openai.com/v1/chat/completions',
-      {
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: `אתה מנוע מודרציה לרשתות חברתיות. עליך לסווג תגובות של משתמשים.
-החזר JSON בלבד עם שדות:
-- "score": מספר בין 0 ל-1 (0=תקין לחלוטין, 1=פוגעני/שלילי מאוד)
-- "reason": הסבר קצר בעברית (מקסימום 20 מילים)
-- "action": "hide" אם score >= 0.6, אחרת "ignore"
-
-תגובות שיש לסמן (score >= 0.6):
-- 욕설, גידופים, תוכן פוגעני
-- הטרדה, איומים, גזענות
-- ספאם, פרסומות לא רלוונטיות
-- תוכן שלילי מאוד על החברה/עסק`,
-          },
-          {
-            role: 'user',
-            content: `סווג את התגובה הבאה:\n"${text}"`,
-          },
-        ],
-        temperature: 0.1,
-        max_tokens: 150,
-        response_format: { type: 'json_object' },
-      },
-      {
-        headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' },
-        timeout: 10000,
-      }
-    );
-
-    const result = JSON.parse(resp.data.choices[0].message.content);
-    return {
-      score:  parseFloat(result.score) || 0,
-      reason: result.reason || '',
-      action: result.action || 'ignore',
-    };
-  } catch (err) {
-    logger.warn('[Moderation] GPT classify error:', err.message);
-    return keywordClassify(text);
-  }
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content:
+`Classify a comment on an Israeli real-estate brand's social post. Return JSON only:
+{"category": one of ["hostile","positive","spam","neutral"], "lang": ISO-639-1 code, "score": 0..1}
+- hostile: antisemitic, anti-Israel attacks, "Free Palestine", "genocide", "baby killer", "stolen land", slurs, calls to boycott/violence.
+- positive: support, praise, interest, blessings.
+- spam: ads, scams, links, gibberish.
+- neutral: everything else.
+"lang" = the language the comment is written in.` },
+        { role: 'user', content: `Comment:\n"${text}"` },
+      ],
+      temperature: 0, max_tokens: 80, response_format: { type: 'json_object' },
+    }, { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 12000 });
+    const r = JSON.parse(resp.data.choices[0].message.content);
+    return { category: r.category || 'neutral', lang: r.lang || 'en', score: parseFloat(r.score) || 0 };
+  } catch (err) { logger.warn('[Moderation] classify error:', err.message); return keywordClassify(text); }
 }
 
 function keywordClassify(text) {
-  const lower = text.toLowerCase();
-  const badWords = ['מניאק', 'זין', 'כוס', 'בן זונה', 'תמות', 'שרלטן', 'רמאי', 'גנב', 'שקרן', 'ספאם', 'spam'];
-  const found = badWords.filter(w => lower.includes(w));
-  if (found.length > 0) {
-    return { score: 0.9, reason: `מילות מפתח פוגעניות: ${found.join(', ')}`, action: 'hide' };
-  }
-  return { score: 0.1, reason: 'תקין', action: 'ignore' };
+  const l = (text || '').toLowerCase();
+  const hostile = ['free palestine', 'genocide', 'baby killer', 'apartheid', 'stolen land', 'occupier', 'nazi', 'coloniz', 'from the river', 'בייבי קילר', 'רוצח', 'אפרטהייד', 'כיבוש', 'גנוסייד'];
+  if (hostile.some(w => l.includes(w))) return { category: 'hostile', lang: /[֐-׿]/.test(text) ? 'he' : 'en', score: 0.9 };
+  const spam = ['http://', 'https://', 'whatsapp +', 'טלגרם', 'spam'];
+  if (spam.some(w => l.includes(w))) return { category: 'spam', lang: 'en', score: 0.8 };
+  return { category: 'neutral', lang: /[֐-׿]/.test(text) ? 'he' : 'en', score: 0.1 };
 }
 
-// ── Email Approval ────────────────────────────────────────────────────────────
+// ── Generate measured reply (OpenAI) ──────────────────────────────────────────
+const REPLY_SYSTEM = `You write SHORT public comment replies for QUANTUM, an Israeli real-estate brand.
+Reply in the SAME language as the comment. Keep it to 1-2 short, punchy, on-point sentences. This is social media, not an essay. Calm, never inflammatory. At most one 🕊️ or 🇮🇱.
+NEVER use em-dashes or long dashes ("—" or "–"). Use only commas and periods.
 
-async function sendApprovalEmail(comment, classification) {
-  const token = require('crypto').randomBytes(24).toString('hex');
+ABSOLUTE RULES — never break:
+- Never insult, mock, dehumanize, threaten, or use slurs. Never be inflammatory or sarcastic.
+- Keep every human's dignity — Israeli and Palestinian alike. Stay calm and warm.
+- Be factual and defensible. Do NOT assert contested or false claims.
 
-  // Save to DB with token
-  await pool.query(`
-    INSERT INTO moderation_queue
-      (platform, comment_id, post_id, user_id, user_name, comment_text, ai_score, ai_reason, status, approval_token)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending_approval', $9)
-    ON CONFLICT (comment_id) DO NOTHING
-  `, [
-    comment.platform, comment.comment_id, comment.post_id,
-    comment.user_id, comment.user_name, comment.text,
-    classification.score, classification.reason, token,
-  ]);
+FOR HOSTILE / ANTI-ISRAEL / ANTISEMITIC comments — answer calmly with (use ONE or two, gently):
+- Israel defends itself; it acts firmly only against those who attack it.
+- The Jewish people has only ONE state in the entire world; other peoples and faiths have many.
+- We truly want peace. The path to peace is simple: those who attack us lay down their weapons and stop the attacks.
+- Everyone here deserves to live in safety and dignity.
+End on peace, never on provocation.
 
-  const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-    ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-    : 'https://quantum-bot-production.up.railway.app';
+FOR POSITIVE comments — warm, grateful, human.
 
-  const approveUrl = `${baseUrl}/api/moderation/approve/${token}`;
-  const ignoreUrl  = `${baseUrl}/api/moderation/ignore/${token}`;
+Return ONLY the reply text. No quotes, no preamble.`;
 
-  const platformLabel = comment.platform === 'facebook' ? 'פייסבוק' : 'אינסטגרם';
-  const scorePercent  = Math.round(classification.score * 100);
-
-  const emailBody = `
-<div dir="rtl" style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-  <h2 style="color: #c0392b;">⚠️ תגובה חשודה זוהתה — QUANTUM Moderation</h2>
-
-  <table style="border-collapse: collapse; width: 100%; margin-bottom: 20px;">
-    <tr><td style="padding: 8px; background: #f8f9fa; font-weight: bold;">פלטפורמה</td><td style="padding: 8px;">${platformLabel}</td></tr>
-    <tr><td style="padding: 8px; background: #f8f9fa; font-weight: bold;">משתמש</td><td style="padding: 8px;">${comment.user_name || 'לא ידוע'}</td></tr>
-    <tr><td style="padding: 8px; background: #f8f9fa; font-weight: bold;">תגובה</td><td style="padding: 8px; color: #c0392b;">"${comment.text}"</td></tr>
-    <tr><td style="padding: 8px; background: #f8f9fa; font-weight: bold;">ציון AI</td><td style="padding: 8px;">${scorePercent}% פוגעני</td></tr>
-    <tr><td style="padding: 8px; background: #f8f9fa; font-weight: bold;">סיבה</td><td style="padding: 8px;">${classification.reason}</td></tr>
-  </table>
-
-  <div style="text-align: center; margin: 30px 0;">
-    <a href="${approveUrl}" style="background: #c0392b; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; margin: 0 10px; font-size: 16px;">
-      ✅ אשר — הסתר וחסום
-    </a>
-    <a href="${ignoreUrl}" style="background: #7f8c8d; color: white; padding: 14px 28px; text-decoration: none; border-radius: 6px; margin: 0 10px; font-size: 16px;">
-      ❌ התעלם
-    </a>
-  </div>
-
-  <p style="color: #7f8c8d; font-size: 12px;">QUANTUM Moderation Bot | ${new Date().toLocaleString('he-IL')}</p>
-</div>
-  `;
-
-  // Send via SendGrid if configured, otherwise log
-  if (SENDGRID_API_KEY) {
-    try {
-      await axios.post(
-        'https://api.sendgrid.com/v3/mail/send',
-        {
-          personalizations: [{ to: [{ email: APPROVAL_EMAIL }] }],
-          from: { email: FROM_EMAIL, name: 'QUANTUM Moderation Bot' },
-          subject: `⚠️ תגובה חשודה ב${platformLabel} — אישור נדרש`,
-          content: [{ type: 'text/html', value: emailBody }],
-        },
-        {
-          headers: { Authorization: `Bearer ${SENDGRID_API_KEY}`, 'Content-Type': 'application/json' },
-          timeout: 10000,
-        }
-      );
-      logger.info(`[Moderation] Approval email sent for comment ${comment.comment_id}`);
-    } catch (err) {
-      logger.error('[Moderation] SendGrid error:', err.message);
-    }
-  } else {
-    // Fallback: log the approval URLs
-    logger.info(`[Moderation] APPROVAL NEEDED for ${comment.comment_id}:`);
-    logger.info(`  Approve: ${approveUrl}`);
-    logger.info(`  Ignore:  ${ignoreUrl}`);
-  }
-
-  return token;
+async function generateReply(text, category, lang) {
+  if (!OPENAI_API_KEY) return null;
+  try {
+    const resp = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: REPLY_SYSTEM },
+        { role: 'user', content: `Comment language: ${lang}. Type: ${category}.\nComment:\n"""${text}"""\nWrite the reply now.` },
+      ],
+      temperature: 0.5, max_tokens: 140,
+    }, { headers: { Authorization: `Bearer ${OPENAI_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 20000 });
+    return (resp.data.choices[0].message.content || '').trim() || null;
+  } catch (err) { logger.warn('[Moderation] generateReply error:', err.message); return null; }
 }
 
-// ── Hide Comment + Block User ─────────────────────────────────────────────────
+// ── Meta Graph: reply / hide ──────────────────────────────────────────────────
+async function postReply(platform, commentId, message) {
+  const edge = platform === 'instagram' ? 'replies' : 'comments';
+  await axios.post(`${GRAPH}/${commentId}/${edge}`, null, { params: { message, access_token: META_ACCESS_TOKEN }, timeout: 12000 });
+}
 
+async function hideComment(commentId) {
+  await axios.post(`${GRAPH}/${commentId}`, null, { params: { is_hidden: true, access_token: META_ACCESS_TOKEN }, timeout: 10000 });
+}
+
+// kept for manual/admin use (e.g. extreme cases)
 async function hideAndBlockComment(commentId, platform, userId) {
   const results = { hidden: false, blocked: false };
-
   try {
-    if (platform === 'facebook') {
-      // Hide FB comment
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${commentId}`,
-        { is_hidden: true },
-        {
-          params: { access_token: META_ACCESS_TOKEN },
-          timeout: 10000,
-        }
-      );
-      results.hidden = true;
-
-      // Block user from page (if userId available)
-      if (userId && META_FB_PAGE_ID) {
-        await axios.post(
-          `https://graph.facebook.com/v19.0/${META_FB_PAGE_ID}/blocked`,
-          { user: userId },
-          {
-            params: { access_token: META_ACCESS_TOKEN },
-            timeout: 10000,
-          }
-        );
-        results.blocked = true;
-      }
-
-    } else if (platform === 'instagram') {
-      // Hide IG comment
-      await axios.post(
-        `https://graph.facebook.com/v19.0/${commentId}`,
-        { is_hidden: true },
-        {
-          params: { access_token: META_ACCESS_TOKEN },
-          timeout: 10000,
-        }
-      );
-      results.hidden = true;
-      // Note: IG user blocking requires different API flow
+    await hideComment(commentId); results.hidden = true;
+    if (platform === 'facebook' && userId && META_FB_PAGE_ID) {
+      await axios.post(`${GRAPH}/${META_FB_PAGE_ID}/blocked`, { user: userId }, { params: { access_token: META_ACCESS_TOKEN }, timeout: 10000 });
+      results.blocked = true;
     }
-  } catch (err) {
-    logger.error(`[Moderation] Hide/block error for ${commentId}:`, err.message);
-  }
-
+  } catch (err) { logger.error(`[Moderation] hide/block error ${commentId}:`, err.message); }
   return results;
 }
 
-// ── Main Scan Job ─────────────────────────────────────────────────────────────
-
+// ── Main scan: reply to hostile + positive, hide spam ─────────────────────────
 async function runModerationScan() {
   await ensureModerationTable();
+  const [fb, ig] = await Promise.all([fetchFBComments(), fetchIGComments()]);
+  const all = [...fb, ...ig];
+  logger.info(`[Moderation] scanning ${all.length} comments (FB:${fb.length} IG:${ig.length}) autoreply=${AUTOREPLY}`);
+  let replied = 0, hidden = 0, skipped = 0;
 
-  const [fbComments, igComments] = await Promise.all([
-    fetchFBComments(),
-    fetchIGComments(),
-  ]);
+  for (const c of all) {
+    if (!c.text?.trim()) continue;
+    const seen = await pool.query('SELECT id FROM moderation_queue WHERE comment_id=$1', [c.comment_id]);
+    if (seen.rows.length) { skipped++; continue; }
 
-  const allComments = [...fbComments, ...igComments];
-  logger.info(`[Moderation] Scanning ${allComments.length} comments (FB: ${fbComments.length}, IG: ${igComments.length})`);
+    const cls = await classifyComment(c.text);
+    let status = 'ignored', reply = null;
 
-  let flagged = 0, skipped = 0;
-
-  for (const comment of allComments) {
-    // Skip already processed
-    const existing = await pool.query(
-      'SELECT id FROM moderation_queue WHERE comment_id = $1',
-      [comment.comment_id]
-    );
-    if (existing.rows.length > 0) { skipped++; continue; }
-
-    // Classify
-    const classification = await classifyComment(comment.text);
-
-    if (classification.action === 'hide') {
-      flagged++;
-      await sendApprovalEmail(comment, classification);
-      logger.info(`[Moderation] Flagged ${comment.platform} comment ${comment.comment_id} (score=${classification.score})`);
+    if (cls.category === 'hostile' || cls.category === 'positive') {
+      reply = await generateReply(c.text, cls.category, cls.lang);
+      if (reply && AUTOREPLY) {
+        try { await postReply(c.platform, c.comment_id, reply); replied++; status = 'replied'; }
+        catch (err) { logger.error(`[Moderation] reply failed ${c.comment_id}:`, err.response?.data ? JSON.stringify(err.response.data).slice(0,160) : err.message); status = 'reply_failed'; }
+      } else if (reply) { status = 'draft'; }
+    } else if (cls.category === 'spam') {
+      try { await hideComment(c.comment_id); hidden++; status = 'hidden'; } catch (e) { status = 'hide_failed'; }
     }
 
-    await new Promise(r => setTimeout(r, 100));
+    await pool.query(
+      `INSERT INTO moderation_queue (platform, comment_id, post_id, user_id, user_name, comment_text, ai_score, ai_reason, category, lang, reply_text, status, actioned_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW()) ON CONFLICT (comment_id) DO NOTHING`,
+      [c.platform, c.comment_id, c.post_id, c.user_id, c.user_name, c.text, cls.score, cls.category, cls.category, cls.lang, reply, status]
+    );
+    if (replied >= MAX_PER_RUN) { logger.info(`[Moderation] per-run cap ${MAX_PER_RUN} reached, pausing until next run`); break; }
+    await new Promise(r => setTimeout(r, 120));
   }
-
-  return { total: allComments.length, flagged, skipped };
+  logger.info(`[Moderation] done - replied:${replied} hidden:${hidden} skipped:${skipped}`);
+  return { total: all.length, replied, hidden, skipped };
 }
 
-module.exports = {
-  runModerationScan,
-  hideAndBlockComment,
-  ensureModerationTable,
-  sendApprovalEmail,
-};
+module.exports = { runModerationScan, generateReply, classifyComment, postReply, hideComment, hideAndBlockComment, ensureModerationTable };
